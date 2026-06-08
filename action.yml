@@ -1,5 +1,5 @@
 name: 'Cora AI Code Review'
-description: 'AI-powered code review for pull requests. Reviews diffs, posts PR comments with findings, and uploads SARIF to GitHub Code Scanning. BYOK — bring your own LLM API key.'
+description: 'AI-powered PR code review. Posts findings as comments and uploads SARIF. BYOK.'
 
 author: 'codecoradev'
 branding:
