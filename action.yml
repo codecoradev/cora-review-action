@@ -186,8 +186,9 @@ runs:
 
           echo "Attempt $ATTEMPT: exit=$EXIT_CODE, sarif_bytes=$SARIF_BYTES"
 
-          # Success: cora exited 0 or produced valid SARIF output
-          if [ "$EXIT_CODE" -eq 0 ] || [ "$SARIF_BYTES" -gt 10 ]; then
+          # Success: cora exited 0 AND produced valid SARIF output
+          # Both conditions must hold — a non-zero exit with fallback SARIF should retry
+          if [ "$EXIT_CODE" -eq 0 ] && [ "$SARIF_BYTES" -gt 10 ]; then
             break
           fi
 
@@ -211,7 +212,8 @@ runs:
 
         # All retries exhausted and still no valid output — generate a fallback SARIF
         # so the workflow doesn't hard-fail on transient API issues.
-        if [ "$EXIT_CODE" -ne 0 ] && [ "$SARIF_BYTES" -lt 10 ]; then
+        # If cora didn't exit cleanly, any SARIF we have is a fallback (not a real review)
+        if [ "$EXIT_CODE" -ne 0 ]; then
           echo "::warning::Cora review could not complete after $ATTEMPT attempt(s). Generating fallback SARIF."
           cat > cora-results.sarif << 'SARIF_EOF'
         {
@@ -296,8 +298,18 @@ runs:
             }
           } else {
             const results = sarifContent.runs[0].results || [];
+            const rules = sarifContent.runs[0].tool?.driver?.rules || [];
+            // A real review has rules defined by cora's analysis. Fallback SARIF has no rules
+            // and only a single warning about LLM failure.
+            const isFallback = rules.length === 0;
             if (results.length === 0) {
-              body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              if (isFallback) {
+                body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              } else {
+                body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              }
+            } else if (isFallback && results.length === 1 && results[0].level === 'warning' && results[0].message?.text?.includes('could not complete')) {
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
             } else {
               const grouped = {};
               for (const r of results) {
