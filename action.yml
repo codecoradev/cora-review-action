@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'major'
   cora-version:
-    description: 'cora-cli version tag (default: latest release)'
+    description: 'cora-code version tag (default: latest release)'
     required: false
     default: 'latest'
   upload-sarif:
@@ -39,7 +39,7 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Resolve cora-cli version
+    - name: Resolve cora-code version
       id: resolve
       shell: bash
       env:
@@ -48,7 +48,7 @@ runs:
         if [ "$INPUT_VERSION" = "latest" ]; then
           for i in 1 2 3; do
             VERSION=$(curl -sfL --connect-timeout 10 \
-              https://api.github.com/repos/codecoradev/cora-cli/releases/latest \
+              https://api.github.com/repos/codecoradev/cora-code/releases/latest \
               | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name', ''))" 2>/dev/null)
             if [ -n "$VERSION" ]; then
               break
@@ -57,16 +57,16 @@ runs:
             sleep 5
           done
           if [ -z "$VERSION" ]; then
-            echo "::warning::Failed to resolve latest cora-cli version from GitHub API, using fallback"
+            echo "::warning::Failed to resolve latest cora-code version from GitHub API, using fallback"
             VERSION="v0.3.0"
           fi
         else
           VERSION="$INPUT_VERSION"
         fi
         echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
-        echo "Resolved cora-cli version: $VERSION"
+        echo "Resolved cora-code version: $VERSION"
 
-    - name: Install cora-cli
+    - name: Install cora-code
       shell: bash
       env:
         CORA_VERSION: ${{ steps.resolve.outputs.VERSION }}
@@ -81,8 +81,8 @@ runs:
           exit 1
         fi
 
-        DOWNLOAD_URL="https://github.com/codecoradev/cora-cli/releases/download/${CORA_VERSION}/${ASSET}-${CORA_VERSION}.tar.gz"
-        CHECKSUM_URL="https://github.com/codecoradev/cora-cli/releases/download/${CORA_VERSION}/checksums-sha256.txt"
+        DOWNLOAD_URL="https://github.com/codecoradev/cora-code/releases/download/${CORA_VERSION}/${ASSET}-${CORA_VERSION}.tar.gz"
+        CHECKSUM_URL="https://github.com/codecoradev/cora-code/releases/download/${CORA_VERSION}/checksums-sha256.txt"
 
         # Download tarball with retry + exponential backoff
         # Handles: CDN propagation delay on fresh releases, transient network errors, rate limits
@@ -223,7 +223,7 @@ runs:
             "tool": {
               "driver": {
                 "name": "cora",
-                "informationUri": "https://github.com/codecoradev/cora-cli",
+                "informationUri": "https://github.com/codecoradev/cora-code",
                 "version": "0.4.0"
               }
             },
@@ -262,14 +262,14 @@ runs:
     - name: Upload SARIF to GitHub Code Scanning
       if: inputs.upload-sarif == 'true' && steps.sarif-check.outputs.results > 0
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
+      uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
       with:
         sarif_file: cora-results.sarif
         category: cora-review
 
     - name: Post PR comment
       if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       with:
@@ -292,9 +292,9 @@ runs:
               fileSize = 0;
             }
             if (fileSize < 10) {
-              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
             } else {
-              body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
             }
           } else {
             const results = sarifContent.runs[0].results || [];
@@ -304,12 +304,12 @@ runs:
             const isFallback = rules.length === 0;
             if (results.length === 0) {
               if (isFallback) {
-                body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+                body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
               } else {
-                body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+                body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
               }
             } else if (isFallback && results.length === 1 && results[0].level === 'warning' && results[0].message?.text?.includes('could not complete')) {
-              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
             } else {
               const grouped = {};
               for (const r of results) {
@@ -340,7 +340,7 @@ runs:
                             hasWarnings ? '⚠️ **Review recommended** — warnings found.' :
                             '✅ **Passed** — only informational notes.';
 
-              body = `## 🔍 Cora AI Code Review\n\n${status}\n${table}\n---\n_Review powered by [cora-cli](https://github.com/codecoradev/cora-cli) · BYOK · MIT_`;
+              body = `## 🔍 Cora AI Code Review\n\n${status}\n${table}\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
             }
           }
 
