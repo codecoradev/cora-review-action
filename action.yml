@@ -187,8 +187,47 @@ runs:
 
           echo "Attempt $ATTEMPT: exit=$EXIT_CODE, sarif_bytes=$SARIF_BYTES"
 
-          # Success: cora exited 0 AND produced valid SARIF output
-          # Both conditions must hold — a non-zero exit with fallback SARIF should retry
+          # Detect cora's internal fallback SARIF (exit=0 but LLM call failed).
+          # cora catches LLM errors in SARIF mode and produces a small fallback SARIF
+          # with no rules and a single warning result containing "could not complete".
+          # This must be treated as a failure so the retry logic kicks in.
+          IS_FALLBACK=0
+          if [ "$EXIT_CODE" -eq 0 ] && [ "$SARIF_BYTES" -gt 10 ]; then
+            IS_FALLBACK=$(python3 -c "
+            import json, sys
+            try:
+                data = json.load(open('cora-results.sarif'))
+                rules = data.get('runs', [{}])[0].get('tool', {}).get('driver', {}).get('rules', [])
+                results = data.get('runs', [{}])[0].get('results', [])
+                if len(rules) == 0 and len(results) <= 1:
+                    msg = results[0].get('message', {}).get('text', '') if results else ''
+                    if 'could not complete' in msg.lower():
+                        print(1)
+                        sys.exit(0)
+                print(0)
+            except:
+                print(0)
+            " 2>/dev/null || echo "0")
+          fi
+
+          if [ "$IS_FALLBACK" -eq 1 ]; then
+            echo "::warning::Attempt $ATTEMPT: cora produced fallback SARIF (LLM error). Will retry."
+            # Extract the actual error from the fallback SARIF for diagnostics
+            FALLBACK_ERR=$(python3 -c "
+            import json
+            try:
+                data = json.load(open('cora-results.sarif'))
+                results = data.get('runs', [{}])[0].get('results', [])
+                if results:
+                    print(results[0].get('message', {}).get('text', '')[:200])
+            except:
+                pass
+            " 2>/dev/null || echo "unknown")
+            echo "  Fallback detail: $FALLBACK_ERR"
+            EXIT_CODE=1  # Force retry by treating as failure
+          fi
+
+          # Success: cora exited 0 AND produced valid SARIF output (not a fallback)
           if [ "$EXIT_CODE" -eq 0 ] && [ "$SARIF_BYTES" -gt 10 ]; then
             break
           fi
@@ -310,7 +349,12 @@ runs:
                 body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
               }
             } else if (isFallback && results.length === 1 && results[0].level === 'warning' && results[0].message?.text?.includes('could not complete')) {
-              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
+              // Extract the actual error from cora's fallback SARIF message.
+              // Format: "Cora AI review could not complete: {error}. Review was skipped..."
+              const fallbackMsg = results[0].message?.text || '';
+              const errMatch = fallbackMsg.match(/could not complete:\s*(.+?)\.\s*Review was skipped/i);
+              const errorDetail = errMatch ? errMatch[1] : 'Unknown error — check workflow logs';
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** LLM API error after retries: ${errorDetail}\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
             } else {
               const grouped = {};
               for (const r of results) {
