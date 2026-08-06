@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-08-06T01:46:12.194656952Z",
+  "commit": "654efb4",
+  "branch": "fix/fallback-sarif-detection-and-error-display",
+  "files_reviewed": 0,
+  "lines_reviewed": null,
+  "findings": {},
+  "categories": {},
+  "quality_score": 10.0,
+  "gate_status": "disabled",
+  "duration_ms": null
+}

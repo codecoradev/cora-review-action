@@ -423,7 +423,7 @@ runs:
           }
 
     - name: Check for blocking issues
-      if: always()
+      if: always() && inputs.upload-sarif == 'true'
       shell: bash
       run: |
         if [ -f cora-results.sarif ]; then
