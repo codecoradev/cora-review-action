@@ -189,23 +189,28 @@ runs:
 
           # Detect cora's internal fallback SARIF (exit=0 but LLM call failed).
           # cora catches LLM errors in SARIF mode and produces a small fallback SARIF
-          # with no rules and a single warning result containing "could not complete".
-          # This must be treated as a failure so the retry logic kicks in.
+          # with a single warning result containing "could not complete".
+          # IMPORTANT: A legitimate empty review (no issues found) also has 0 rules
+          # and 0 results. The ONLY reliable signal is the message text "could not complete"
+          # in results[0]. We must NOT treat empty results as fallback.
           IS_FALLBACK=0
           if [ "$EXIT_CODE" -eq 0 ] && [ "$SARIF_BYTES" -gt 10 ]; then
             IS_FALLBACK=$(python3 -c "
-            import json, sys
+            import json
             try:
                 data = json.load(open('cora-results.sarif'))
-                rules = data.get('runs', [{}])[0].get('tool', {}).get('driver', {}).get('rules', [])
                 results = data.get('runs', [{}])[0].get('results', [])
-                if len(rules) == 0 and len(results) <= 1:
-                    msg = results[0].get('message', {}).get('text', '') if results else ''
+                # Only check results — rules array is empty for BOTH
+                # legitimate "no issues" AND fallback SARIF.
+                if len(results) == 1:
+                    msg = results[0].get('message', {}).get('text', '')
                     if 'could not complete' in msg.lower():
                         print(1)
-                        sys.exit(0)
-                print(0)
-            except:
+                    else:
+                        print(0)
+                else:
+                    print(0)
+            except Exception:
                 print(0)
             " 2>/dev/null || echo "0")
           fi
@@ -338,17 +343,15 @@ runs:
             }
           } else {
             const results = sarifContent.runs[0].results || [];
-            const rules = sarifContent.runs[0].tool?.driver?.rules || [];
-            // A real review has rules defined by cora's analysis. Fallback SARIF has no rules
-            // and only a single warning about LLM failure.
-            const isFallback = rules.length === 0;
+            // Detect fallback SARIF: exactly 1 result with "could not complete" message.
+            // Do NOT use rules.length === 0 — a legitimate empty review (code is clean)
+            // also has 0 rules and 0 results. That's not a failure.
+            const isFallback = results.length === 1
+              && results[0].level === 'warning'
+              && (results[0].message?.text || '').includes('could not complete');
             if (results.length === 0) {
-              if (isFallback) {
-                body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora was unable to reach the LLM API after retries. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
-              } else {
-                body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
-              }
-            } else if (isFallback && results.length === 1 && results[0].level === 'warning' && results[0].message?.text?.includes('could not complete')) {
+              body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-code](https://github.com/codecoradev/cora-code) · BYOK · MIT_`;
+            } else if (isFallback) {
               // Extract the actual error from cora's fallback SARIF message.
               // Format: "Cora AI review could not complete: {error}. Review was skipped..."
               const fallbackMsg = results[0].message?.text || '';
