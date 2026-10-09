@@ -83,8 +83,25 @@ That's it! Every PR will now get an AI code review comment.
 | `cora-model` | No | — | LLM model ID |
 | `base-branch` | No | `origin/develop` | Base branch to compare against |
 | `severity` | No | `major` | Minimum severity to report (`info`, `minor`, `major`, `critical`) |
-| `cora-version` | No | `latest` | Pin a specific cora-cli version (e.g., `v0.4.6`) |
+| `cora-version` | No | `latest` | Pin a specific cora-code release tag (e.g., `v0.18.0`) |
+| `require-signature` | No | `false` | Fail unless the release checksums carry a valid cosign signature (releases from `v0.18.0`). Older releases install with a notice when `false`. |
 | `upload-sarif` | No | `true` | Upload SARIF to GitHub Code Scanning |
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `cora-version` | The cora-code release that was installed |
+| `signature-verified` | `true` when the release checksums were verified with cosign |
+
+## Supply-chain checks
+
+The action downloads the cora-code release for the runner's architecture and verifies it before installing:
+
+1. **Checksum:** the archive must match `checksums-sha256.txt` from the same release.
+2. **Signature (cora-code v0.18.0+):** `checksums-sha256.txt` is signed with cosign keyless in the cora-code release workflow. The action runs `cosign verify-blob` against the exact identity `https://github.com/codecoradev/cora-code/.github/workflows/release.yml@refs/tags/<tag>` (GitHub OIDC issuer). A bad signature always aborts. Set `require-signature: true` to also abort when a release has no signature.
+
+With `cora-version: latest` the release is resolved through the GitHub API (authenticated with `github-token`), then through the `/releases/latest` redirect. If both fail the action stops with an error instead of guessing a version.
 
 ## Custom Configuration
 
