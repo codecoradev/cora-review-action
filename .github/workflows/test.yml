@@ -1,0 +1,85 @@
+name: Test action
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-latest:
+    name: latest release, signature required
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The review itself cannot reach an LLM here (dummy endpoint); the action then
+      # emits its fallback SARIF. What is under test is version resolution, the
+      # checksum check and the cosign signature check.
+      - name: Run the action
+        id: act
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cora-api-key: dummy
+          cora-base-url: http://127.0.0.1:1
+          base-branch: origin/main
+          upload-sarif: 'false'
+          require-signature: 'true'
+      - name: Assert
+        run: |
+          echo "version=${{ steps.act.outputs.cora-version }} signature-verified=${{ steps.act.outputs.signature-verified }}"
+          test "${{ steps.act.outputs.signature-verified }}" = "true"
+          case "${{ steps.act.outputs.cora-version }}" in v0.1[89]*|v0.[2-9]*|v[1-9]*) ;; *) echo "unexpected version"; exit 1;; esac
+
+  unsigned-old-release:
+    name: old release without signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Installs with a notice by default
+        id: default
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cora-api-key: dummy
+          cora-base-url: http://127.0.0.1:1
+          base-branch: origin/main
+          upload-sarif: 'false'
+          cora-version: v0.17.2
+      - name: Assert default behaviour
+        run: |
+          test "${{ steps.default.outputs.cora-version }}" = "v0.17.2"
+          test "${{ steps.default.outputs.signature-verified }}" = "false"
+
+  unsigned-old-release-required:
+    name: old release with require-signature fails
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Must fail
+        id: strict
+        continue-on-error: true
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cora-api-key: dummy
+          cora-base-url: http://127.0.0.1:1
+          base-branch: origin/main
+          upload-sarif: 'false'
+          cora-version: v0.17.2
+          require-signature: 'true'
+      - name: Assert it failed
+        run: |
+          echo "outcome=${{ steps.strict.outcome }}"
+          test "${{ steps.strict.outcome }}" = "failure"
