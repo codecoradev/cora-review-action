@@ -1,6 +1,5 @@
 # Cora AI Code Review
 
-[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Cora%20AI%20Code%20Review-blue?logo=github)](https://github.com/marketplace/actions/cora-ai-code-review)
 [![cora-cli](https://img.shields.io/badge/cora--cli-v0.4.6-blue?logo=rust)](https://github.com/codecoradev/cora-cli)
 
 AI-powered code review for pull requests. Reviews your diffs, posts a formatted PR comment with findings, and optionally uploads SARIF results to GitHub Code Scanning.
