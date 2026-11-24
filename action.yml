@@ -275,11 +275,17 @@ runs:
         # Normalize inputs: fall back to defaults on empty or non-numeric values.
         case "$REVIEW_TIMEOUT_SECONDS" in ''|*[!0-9]*) REVIEW_TIMEOUT_SECONDS=900 ;; esac
         case "$MAX_ATTEMPTS" in ''|*[!0-9]*) MAX_ATTEMPTS=2 ;; esac
+        # Enforce the documented minimums (a 0 would skip the review entirely).
+        [ "$REVIEW_TIMEOUT_SECONDS" -ge 30 ] || REVIEW_TIMEOUT_SECONDS=30
+        [ "$MAX_ATTEMPTS" -ge 1 ] || MAX_ATTEMPTS=1
+        # cora's internal timeout fires 30s before the wrapper kill (floor 30).
+        LLM_TIMEOUT=$((REVIEW_TIMEOUT_SECONDS - 30))
+        [ "$LLM_TIMEOUT" -ge 30 ] || LLM_TIMEOUT=30
 
         run_cora() {
           if [ ! -f .cora.yaml ]; then
             # Generated CI config: 5MB diff limit, per-attempt LLM timeout
-            printf 'hook:\n  max_diff_size: 5242880\nllm:\n  timeout: %s\n' "$REVIEW_TIMEOUT_SECONDS" > .cora-ci.yaml
+            printf 'hook:\n  max_diff_size: 5242880\nllm:\n  timeout: %s\n' "$LLM_TIMEOUT" > .cora-ci.yaml
             CORA_CONFIG=".cora-ci.yaml" timeout --kill-after=30 "$REVIEW_TIMEOUT_SECONDS" \
               cora review \
               --base "$INPUT_BASE" \
@@ -357,6 +363,7 @@ runs:
         for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS:-3}"); do
           echo "Attempt $ATTEMPT/$MAX_ATTEMPTS starting (timeout ${REVIEW_TIMEOUT_SECONDS}s)..."
           T0=$SECONDS
+          EXIT_CODE=0
           run_cora || EXIT_CODE=$?
           echo "  attempt wall time: $((SECONDS - T0))s"
           SARIF_BYTES=$(wc -c < cora-results.sarif 2>/dev/null || echo "0")
