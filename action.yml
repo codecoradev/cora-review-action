@@ -39,6 +39,14 @@ inputs:
     description: 'Fail unless the cora-code release carries a valid cosign signature (releases from v0.18.0 on). Default false: older releases without a signature still install, with a notice.'
     required: false
     default: 'false'
+  review-timeout-seconds:
+    description: 'Wall-clock limit in seconds per review attempt. Also written into the generated CI config as llm.timeout when the repo has no project .cora.yaml. A stuck attempt is killed at this limit and retried (see max-attempts). Minimum 30.'
+    required: false
+    default: '600'
+  max-attempts:
+    description: 'Number of review attempts before falling back to a "could not complete" SARIF result. Job budget should be sized as max-attempts x review-timeout-seconds plus setup time.'
+    required: false
+    default: '3'
 
 outputs:
   cora-version:
@@ -250,38 +258,87 @@ runs:
         CORA_MODEL: ${{ inputs.cora-model }}
         INPUT_BASE: ${{ inputs.base-branch }}
         INPUT_SEVERITY: ${{ inputs.severity }}
+        REVIEW_TIMEOUT_SECONDS: ${{ inputs.review-timeout-seconds }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
       run: |
-        # Build the cora review command with retry logic and 600s timeout
+        # Run one review attempt with live progress and a wall-clock timeout.
+        # - `--progress` emits NDJSON events on stderr (started, parsing_diff,
+        #   llm_response, complete) so long LLM reviews are visible in the log
+        #   instead of appearing to hang silently.
+        # - `timeout` bounds each attempt independently; the previous behavior
+        #   (3 x 600s config timeout, no wall-clock kill) could silently consume
+        #   the entire job budget before GitHub cancelled the job.
+        # Normalize inputs: fall back to defaults on empty or non-numeric values.
+        case "$REVIEW_TIMEOUT_SECONDS" in ''|*[!0-9]*) REVIEW_TIMEOUT_SECONDS=600 ;; esac
+        case "$MAX_ATTEMPTS" in ''|*[!0-9]*) MAX_ATTEMPTS=3 ;; esac
+
         run_cora() {
           if [ ! -f .cora.yaml ]; then
-            # Create CI config with 5MB diff limit and 600s timeout
-            printf 'hook:\n  max_diff_size: 5242880\nllm:\n  timeout: 600\n' > .cora-ci.yaml
-            CORA_CONFIG=".cora-ci.yaml" cora review \
+            # Generated CI config: 5MB diff limit, per-attempt LLM timeout
+            printf 'hook:\n  max_diff_size: 5242880\nllm:\n  timeout: %s\n' "$REVIEW_TIMEOUT_SECONDS" > .cora-ci.yaml
+            CORA_CONFIG=".cora-ci.yaml" timeout --kill-after=30 "$REVIEW_TIMEOUT_SECONDS" \
+              cora review \
               --base "$INPUT_BASE" \
               --format sarif \
               --severity "$INPUT_SEVERITY" \
+              --progress \
               --quiet \
-              > cora-results.sarif 2>cora-stderr.log
+              > cora-results.sarif 2> >(tee cora-progress.log >&2)
           else
             echo "Using project .cora.yaml for configuration"
-            cora review \
+            timeout --kill-after=30 "$REVIEW_TIMEOUT_SECONDS" \
+              cora review \
               --base "$INPUT_BASE" \
               --format sarif \
               --severity "$INPUT_SEVERITY" \
+              --progress \
               --quiet \
-              > cora-results.sarif 2>cora-stderr.log
+              > cora-results.sarif 2> >(tee cora-progress.log >&2)
           fi
           return $?
         }
 
-        # Retry up to 3 times with exponential backoff (10s, 30s, 60s)
+        # Summarize one attempt's NDJSON progress log into human-readable lines.
+        summarize_progress() {
+          python3 - "$1" <<'PROG_EOF'
+        import json, sys
+        try:
+            events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+        except Exception:
+            print("  (no progress events captured)")
+            sys.exit(0)
+        for e in events:
+            s = e.get("status", "?")
+            if s == "parsing_diff":
+                print(f"  diff: {e.get('files_changed', '?')} files / {e.get('lines_changed', '?')} lines changed")
+            elif s == "llm_response":
+                toks = e.get("tokens") or {}
+                print(f"  llm: {e.get('duration_ms', '?')} ms, tokens in={toks.get('input', '?')} out={toks.get('output', '?')}")
+            elif s == "complete":
+                toks = e.get("tokens") or {}
+                print(f"  complete: {e.get('issues', '?')} issue(s), blocked={e.get('blocked', '?')}, tokens in={toks.get('input', '?')} out={toks.get('output', '?')}")
+        PROG_EOF
+        }
+
+        # Retry with configurable attempts; backoff 20s between attempts.
         EXIT_CODE=1
-        for ATTEMPT in 1 2 3; do
+        ATTEMPT=1
+        for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS:-3}"); do
+          echo "Attempt $ATTEMPT/$MAX_ATTEMPTS starting (timeout ${REVIEW_TIMEOUT_SECONDS}s)..."
+          T0=$SECONDS
           run_cora
           EXIT_CODE=$?
+          echo "  attempt wall time: $((SECONDS - T0))s"
           SARIF_BYTES=$(wc -c < cora-results.sarif 2>/dev/null || echo "0")
 
           echo "Attempt $ATTEMPT: exit=$EXIT_CODE, sarif_bytes=$SARIF_BYTES"
+
+          if [ "$EXIT_CODE" -eq 124 ] || [ "$EXIT_CODE" -eq 137 ]; then
+            echo "::warning::Attempt $ATTEMPT hit the review-timeout-seconds limit (${REVIEW_TIMEOUT_SECONDS}s) and was killed. If this PR legitimately needs longer reviews, raise 'review-timeout-seconds' (and the job's timeout-minutes: budget ≈ max-attempts × review-timeout-seconds + setup)."
+          fi
+
+          # Human-readable summary of this attempt's progress events (all outcomes)
+          summarize_progress cora-progress.log
 
           # Detect cora's internal fallback SARIF (exit=0 but LLM call failed).
           # cora catches LLM errors in SARIF mode and produces a small fallback SARIF
@@ -333,23 +390,15 @@ runs:
             break
           fi
 
-          # On failure, show stderr and retry
-          if [ -s cora-stderr.log ]; then
-            echo "::warning::Attempt $ATTEMPT failed. Cora stderr: $(cat cora-stderr.log)"
-          fi
-
-          if [ "$ATTEMPT" -lt 3 ]; then
+          if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
             SLEEP=$((ATTEMPT * 20))
             echo "Retrying in ${SLEEP}s..."
             sleep "$SLEEP"
-            rm -f cora-results.sarif cora-stderr.log
+            rm -f cora-results.sarif cora-progress.log
           fi
         done
 
         echo "Cora review complete ($SARIF_BYTES bytes, exit=$EXIT_CODE, attempts=$ATTEMPT)"
-        if [ -s cora-stderr.log ]; then
-          echo "::warning::Cora stderr: $(cat cora-stderr.log)"
-        fi
 
         # All retries exhausted and still no valid output — generate a fallback SARIF
         # so the workflow doesn't hard-fail on transient API issues.
@@ -371,7 +420,7 @@ runs:
             "results": [{
               "level": "warning",
               "message": {
-                "text": "Cora AI review could not complete — LLM API was unavailable after 3 retry attempts. Review was skipped; no code quality issues were found by the automated check."
+                "text": "Cora AI review could not complete — LLM API was unavailable after the configured retry budget (max-attempts x review-timeout-seconds). Review was skipped; no code quality issues were found by the automated check."
               }
             }]
           }]
