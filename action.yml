@@ -349,10 +349,11 @@ runs:
 
         # Retry with configurable attempts; backoff 20s between attempts.
         # `run_cora || EXIT_CODE=$?` keeps the loop alive under the step's
-        # `set -e` for ANY non-zero cora exit (1 = generic failure/fallback,
+        # set -e for ANY non-zero cora exit (1 = generic failure/fallback,
         # 2 = e.g. "all chunks failed" in chunked review, 124/137 = timeout kill).
         EXIT_CODE=1
         ATTEMPT=1
+        REVIEW_ACCEPTED=0
         for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS:-3}"); do
           echo "Attempt $ATTEMPT/$MAX_ATTEMPTS starting (timeout ${REVIEW_TIMEOUT_SECONDS}s)..."
           T0=$SECONDS
@@ -373,10 +374,22 @@ runs:
           # SARIF and stop retrying (retrying would rm the results and rerun
           # the same review). fail_on_incomplete exit semantics are advisory
           # when the review itself produced usable output.
+          #
+          # Same for an EMPTY SARIF whose progress log ends with a 'complete'
+          # event and no error: cora 0.21.x sometimes exits 1 on a review that
+          # demonstrably finished clean (llm_response + complete events, 0
+          # issues). The progress events are the ground truth, so accept it.
           if [ "$EXIT_CODE" -ne 0 ]; then
             SARIF_KIND=$(classify_sarif | tail -1)
             if [ "$SARIF_KIND" = "real" ]; then
               echo "::warning::cora exited $EXIT_CODE (fail_on_incomplete semantics) but returned real findings. Keeping them; the non-zero exit is advisory."
+              REVIEW_ACCEPTED=1
+              break
+            fi
+            if [ "$SARIF_KIND" = "empty" ] && grep -q '"status":"complete"' cora-progress.log 2>/dev/null \
+               && ! grep -q '"status":"error"' cora-progress.log 2>/dev/null; then
+              echo "::warning::cora exited $EXIT_CODE but the progress log shows a completed, error-free review with no findings. Accepting the empty SARIF; the non-zero exit is advisory."
+              REVIEW_ACCEPTED=1
               break
             fi
           fi
@@ -441,32 +454,14 @@ runs:
 
         echo "Cora review complete ($SARIF_BYTES bytes, exit=$EXIT_CODE, attempts=$ATTEMPT)"
 
-        # All retries exhausted with a non-zero exit — decide what to do with
-        # the SARIF we have. cora 0.21.x returns exit 1 under its
-        # fail_on_incomplete semantics even when the review itself produced
-        # real findings, so an exit code alone must not discard results.
+        # All retries exhausted with a non-zero exit that was NOT accepted
+        # (accepted = real findings kept, or a progress-verified clean review).
+        # Decide what to do with the SARIF we have. cora 0.21.x returns exit 1
+        # under its fail_on_incomplete semantics even when the review itself
+        # produced real findings, so an exit code alone must not discard results.
         # Classification: 'real' = findings present, 'fallback' = cora's own
         # internal "could not complete" SARIF, anything else = unusable.
-        # Classify the SARIF we have: 'real' = findings present, 'fallback' =
-        # cora's own internal "could not complete" SARIF, otherwise unusable.
-        classify_sarif() {
-          python3 - <<'CLASS_EOF'
-        import json
-        try:
-            d = json.load(open('cora-results.sarif'))
-            results = d['runs'][0].get('results', [])
-            if len(results) == 1 and 'could not complete' in results[0].get('message', {}).get('text', '').lower():
-                print('fallback')
-            elif len(results) > 0:
-                print('real')
-            else:
-                print('empty')
-        except Exception as e:
-            print('bad')
-        CLASS_EOF
-        }
-
-        if [ "$EXIT_CODE" -ne 0 ]; then
+        if [ "$EXIT_CODE" -ne 0 ] && [ "$REVIEW_ACCEPTED" != "1" ]; then
           SARIF_KIND=$(classify_sarif | tail -1)
           if [ "$SARIF_KIND" = "real" ]; then
             echo "::warning::cora exited $EXIT_CODE (fail_on_incomplete semantics) but returned real findings. Keeping the actual review SARIF; the non-zero exit is treated as advisory."
