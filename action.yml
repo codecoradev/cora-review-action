@@ -388,8 +388,18 @@ runs:
             fi
             # Ground truth = the LAST progress event. cora 0.21.x sometimes
             # exits 1 on a review that finished clean (complete, issues=0).
-            # Give the async tee (process substitution) a moment to flush.
+            # Give the async tee (process substitution) a moment to flush,
+            # then wait for the file to be stable: the tee process can lag the
+            # cora process, and a half-flushed log breaks the JSON parser.
             sleep 2
+            STABLE=0
+            for _ in 1 2 3 4 5 6 7 8; do
+              S1=$(wc -c < cora-progress.log 2>/dev/null || echo 0)
+              sleep 2
+              S2=$(wc -c < cora-progress.log 2>/dev/null || echo 0)
+              if [ "$S1" = "$S2" ] && [ "$S2" -gt 0 ]; then STABLE=1; break; fi
+            done
+            [ "$STABLE" != "1" ] && echo "::debug::progress log never stabilized (empty?)"
             LAST_EVENT=$(python3 - <<'LAST_EOF'
         import json
         try:
