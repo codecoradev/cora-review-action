@@ -288,7 +288,7 @@ runs:
               --progress \
               --no-cache \
               --quiet \
-              > cora-results.sarif 2> >(tee cora-progress.log >&2)
+              > cora-results.sarif 2> >(stdbuf -oL tee cora-progress.log >2> >(tee cora-progress.log >&2)2)
           else
             echo "Using project .cora.yaml for configuration"
             timeout --kill-after=30 "$REVIEW_TIMEOUT_SECONDS" \
@@ -299,7 +299,7 @@ runs:
               --progress \
               --no-cache \
               --quiet \
-              > cora-results.sarif 2> >(tee cora-progress.log >&2)
+              > cora-results.sarif 2> >(stdbuf -oL tee cora-progress.log >2> >(tee cora-progress.log >&2)2)
           fi
           return $?
         }
