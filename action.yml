@@ -268,6 +268,10 @@ runs:
         # - `timeout` bounds each attempt independently; the previous behavior
         #   (3 x 600s config timeout, no wall-clock kill) could silently consume
         #   the entire job budget before GitHub cancelled the job.
+        # - `--no-cache`: a CI verdict must come from a live review of THIS head
+        #   commit. Cached verdicts are replayed with exit 1 (fail-closed) by
+        #   cora 0.21.x when the cached tree cannot be verified, which produced
+        #   "could not complete" comments even though the review itself was fine.
         # Normalize inputs: fall back to defaults on empty or non-numeric values.
         case "$REVIEW_TIMEOUT_SECONDS" in ''|*[!0-9]*) REVIEW_TIMEOUT_SECONDS=900 ;; esac
         case "$MAX_ATTEMPTS" in ''|*[!0-9]*) MAX_ATTEMPTS=2 ;; esac
@@ -282,6 +286,7 @@ runs:
               --format sarif \
               --severity "$INPUT_SEVERITY" \
               --progress \
+              --no-cache \
               --quiet \
               > cora-results.sarif 2> >(tee cora-progress.log >&2)
           else
@@ -292,6 +297,7 @@ runs:
               --format sarif \
               --severity "$INPUT_SEVERITY" \
               --progress \
+              --no-cache \
               --quiet \
               > cora-results.sarif 2> >(tee cora-progress.log >&2)
           fi
