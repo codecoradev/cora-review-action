@@ -408,12 +408,42 @@ runs:
 
         echo "Cora review complete ($SARIF_BYTES bytes, exit=$EXIT_CODE, attempts=$ATTEMPT)"
 
-        # All retries exhausted and still no valid output — generate a fallback SARIF
-        # so the workflow doesn't hard-fail on transient API issues.
-        # If cora didn't exit cleanly, any SARIF we have is a fallback (not a real review)
+        # All retries exhausted with a non-zero exit — decide what to do with
+        # the SARIF we have. cora 0.21.x returns exit 1 under its
+        # fail_on_incomplete semantics even when the review itself produced
+        # real findings, so an exit code alone must not discard results.
+        # Classification: 'real' = findings present, 'fallback' = cora's own
+        # internal "could not complete" SARIF, anything else = unusable.
+        # Classify the SARIF we have: 'real' = findings present, 'fallback' =
+        # cora's own internal "could not complete" SARIF, otherwise unusable.
+        classify_sarif() {
+          python3 - <<'CLASS_EOF'
+        import json
+        try:
+            d = json.load(open('cora-results.sarif'))
+            results = d['runs'][0].get('results', [])
+            if len(results) == 1 and 'could not complete' in results[0].get('message', {}).get('text', '').lower():
+                print('fallback')
+            elif len(results) > 0:
+                print('real')
+            else:
+                print('empty')
+        except Exception as e:
+            print('bad')
+        CLASS_EOF
+        }
+
         if [ "$EXIT_CODE" -ne 0 ]; then
-          echo "::warning::Cora review could not complete after $ATTEMPT attempt(s). Generating fallback SARIF."
-          cat > cora-results.sarif << 'SARIF_EOF'
+          SARIF_KIND=$(classify_sarif | tail -1)
+          if [ "$SARIF_KIND" = "real" ]; then
+            echo "::warning::cora exited $EXIT_CODE (fail_on_incomplete semantics) but returned real findings. Keeping the actual review SARIF; the non-zero exit is treated as advisory."
+          else
+            if [ "$SARIF_KIND" = "empty" ]; then
+              echo "::warning::cora exited $EXIT_CODE with no findings and the review flagged incomplete. Generating fallback SARIF."
+            else
+              echo "::warning::Cora review could not complete after $ATTEMPT attempt(s). Generating fallback SARIF."
+            fi
+            cat > cora-results.sarif << 'SARIF_EOF'
         {
           "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
           "version": "2.1.0",
@@ -422,18 +452,33 @@ runs:
               "driver": {
                 "name": "cora",
                 "informationUri": "https://github.com/codecoradev/cora-code",
-                "version": "0.4.0"
+                "version": "0.4.0",
+                "rules": [
+                  {
+                    "id": "COR0001",
+                    "name": "ReviewIncomplete",
+                    "shortDescription": {"text": "Cora AI review could not complete"}
+                  }
+                ]
               }
             },
             "results": [{
+              "ruleId": "COR0001",
               "level": "warning",
               "message": {
                 "text": "Cora AI review could not complete — LLM API was unavailable after the configured retry budget (max-attempts x review-timeout-seconds). Review was skipped; no code quality issues were found by the automated check."
-              }
+              },
+              "locations": [{
+                "physicalLocation": {
+                  "artifactLocation": {"uri": "README.md"},
+                  "region": {"startLine": 1}
+                }
+              }]
             }]
           }]
         }
         SARIF_EOF
+          fi
         fi
 
     - name: Check SARIF for findings
