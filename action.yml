@@ -42,11 +42,11 @@ inputs:
   review-timeout-seconds:
     description: 'Wall-clock limit in seconds per review attempt. Also written into the generated CI config as llm.timeout when the repo has no project .cora.yaml. A stuck attempt is killed at this limit and retried (see max-attempts). Minimum 30.'
     required: false
-    default: '600'
+    default: '900'
   max-attempts:
     description: 'Number of review attempts before falling back to a "could not complete" SARIF result. Job budget should be sized as max-attempts x review-timeout-seconds plus setup time.'
     required: false
-    default: '3'
+    default: '2'
 
 outputs:
   cora-version:
@@ -269,8 +269,8 @@ runs:
         #   (3 x 600s config timeout, no wall-clock kill) could silently consume
         #   the entire job budget before GitHub cancelled the job.
         # Normalize inputs: fall back to defaults on empty or non-numeric values.
-        case "$REVIEW_TIMEOUT_SECONDS" in ''|*[!0-9]*) REVIEW_TIMEOUT_SECONDS=600 ;; esac
-        case "$MAX_ATTEMPTS" in ''|*[!0-9]*) MAX_ATTEMPTS=3 ;; esac
+        case "$REVIEW_TIMEOUT_SECONDS" in ''|*[!0-9]*) REVIEW_TIMEOUT_SECONDS=900 ;; esac
+        case "$MAX_ATTEMPTS" in ''|*[!0-9]*) MAX_ATTEMPTS=2 ;; esac
 
         run_cora() {
           if [ ! -f .cora.yaml ]; then
