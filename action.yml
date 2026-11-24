@@ -386,9 +386,22 @@ runs:
               REVIEW_ACCEPTED=1
               break
             fi
-            if [ "$SARIF_KIND" = "empty" ] && grep -q '"status":"complete"' cora-progress.log 2>/dev/null \
-               && ! grep -q '"status":"error"' cora-progress.log 2>/dev/null; then
-              echo "::warning::cora exited $EXIT_CODE but the progress log shows a completed, error-free review with no findings. Accepting the empty SARIF; the non-zero exit is advisory."
+            # Ground truth = the LAST progress event. cora 0.21.x sometimes
+            # exits 1 on a review that finished clean (complete, issues=0).
+            # Give the async tee (process substitution) a moment to flush.
+            sleep 2
+            LAST_EVENT=$(python3 - <<'LAST_EOF'
+        import json
+        try:
+            events = [json.loads(l) for l in open('cora-progress.log') if l.strip()]
+            print(events[-1].get("status", "none") if events else "none")
+        except Exception:
+            print("unreadable")
+        LAST_EOF
+        )
+            LAST_EVENT=$(echo "$LAST_EVENT" | tail -1)
+            if [ "$SARIF_KIND" = "empty" ] && [ "$LAST_EVENT" = "complete" ]; then
+              echo "::warning::cora exited $EXIT_CODE but the last progress event is a clean 'complete' (no error). Accepting the empty SARIF; the non-zero exit is advisory."
               REVIEW_ACCEPTED=1
               break
             fi
