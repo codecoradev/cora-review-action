@@ -36,6 +36,39 @@ jobs:
           test "${{ steps.act.outputs.signature-verified }}" = "true"
           case "${{ steps.act.outputs.cora-version }}" in v0.1[89]*|v0.[2-9]*|v[1-9]*) ;; *) echo "unexpected version"; exit 1;; esac
 
+  max-attempts-1-fallback:
+    name: max-attempts 1 reaches fallback SARIF fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The review cannot reach an LLM (dummy endpoint); with max-attempts: 1
+      # the action must produce its fallback SARIF immediately (no 20s/40s
+      # retry backoff), leaving cora-results.sarif with the fallback result.
+      - name: Run the action
+        id: act
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cora-api-key: dummy-not-a-real-key
+          cora-base-url: http://127.0.0.1:1
+          base-branch: origin/main
+          upload-sarif: 'false'
+          max-attempts: '1'
+      - name: Assert fallback SARIF
+        run: |
+          test -f cora-results.sarif
+          python3 -c "
+          import json, sys
+          d = json.load(open('cora-results.sarif'))
+          results = d.get('runs', [{}])[0].get('results', [])
+          assert len(results) == 1, f'expected 1 fallback result, got {len(results)}'
+          assert 'could not complete' in results[0].get('message', {}).get('text', '').lower(), 'not the fallback message'
+          print('fallback SARIF OK:', results[0]['message']['text'][:80])
+          "
+
   unsigned-old-release:
     name: old release without signature
     runs-on: ubuntu-latest

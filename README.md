@@ -86,6 +86,8 @@ That's it! Every PR will now get an AI code review comment.
 | `cora-version` | No | `latest` | Pin a specific cora-code release tag (e.g., `v0.18.0`) |
 | `require-signature` | No | `false` | Fail unless the release checksums carry a valid cosign signature (releases from `v0.18.0`). Older releases install with a notice when `false`. |
 | `upload-sarif` | No | `true` | Upload SARIF to GitHub Code Scanning |
+| `review-timeout-seconds` | No | `900` | Wall-clock limit per review attempt (seconds). Also sets `llm.timeout` in the generated CI config when the repo has no `.cora.yaml`. A stuck attempt is killed and retried up to `max-attempts` times. Size the job's `timeout-minutes` to match (budget ≈ `max-attempts` × `review-timeout-seconds` + setup). |
+| `max-attempts` | No | `2` | Review attempts before the action falls back to a "could not complete" SARIF result. Lower it (e.g. `1`) for fail-fast behavior. |
 
 ## Outputs
 
