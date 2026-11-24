@@ -321,13 +321,15 @@ runs:
         }
 
         # Retry with configurable attempts; backoff 20s between attempts.
+        # `run_cora || EXIT_CODE=$?` keeps the loop alive under the step's
+        # `set -e` for ANY non-zero cora exit (1 = generic failure/fallback,
+        # 2 = e.g. "all chunks failed" in chunked review, 124/137 = timeout kill).
         EXIT_CODE=1
         ATTEMPT=1
         for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS:-3}"); do
           echo "Attempt $ATTEMPT/$MAX_ATTEMPTS starting (timeout ${REVIEW_TIMEOUT_SECONDS}s)..."
           T0=$SECONDS
-          run_cora
-          EXIT_CODE=$?
+          run_cora || EXIT_CODE=$?
           echo "  attempt wall time: $((SECONDS - T0))s"
           SARIF_BYTES=$(wc -c < cora-results.sarif 2>/dev/null || echo "0")
 
