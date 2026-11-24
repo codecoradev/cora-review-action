@@ -326,6 +326,27 @@ runs:
         PROG_EOF
         }
 
+        # Classify the SARIF we have: 'real' = findings present, 'fallback' =
+        # cora's own internal "could not complete" SARIF, otherwise unusable.
+        # Defined BEFORE the retry loop: a nonzero exit with real findings must
+        # stop the loop, not get clobbered by the next attempt's output.
+        classify_sarif() {
+          python3 - <<'CLASS_EOF'
+        import json
+        try:
+            d = json.load(open('cora-results.sarif'))
+            results = d['runs'][0].get('results', [])
+            if len(results) == 1 and 'could not complete' in results[0].get('message', {}).get('text', '').lower():
+                print('fallback')
+            elif len(results) > 0:
+                print('real')
+            else:
+                print('empty')
+        except Exception as e:
+            print('bad')
+        CLASS_EOF
+        }
+
         # Retry with configurable attempts; backoff 20s between attempts.
         # `run_cora || EXIT_CODE=$?` keeps the loop alive under the step's
         # `set -e` for ANY non-zero cora exit (1 = generic failure/fallback,
@@ -347,6 +368,18 @@ runs:
 
           # Human-readable summary of this attempt's progress events (all outcomes)
           summarize_progress cora-progress.log
+
+          # A nonzero exit with REAL findings is terminal: keep this attempt's
+          # SARIF and stop retrying (retrying would rm the results and rerun
+          # the same review). fail_on_incomplete exit semantics are advisory
+          # when the review itself produced usable output.
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            SARIF_KIND=$(classify_sarif | tail -1)
+            if [ "$SARIF_KIND" = "real" ]; then
+              echo "::warning::cora exited $EXIT_CODE (fail_on_incomplete semantics) but returned real findings. Keeping them; the non-zero exit is advisory."
+              break
+            fi
+          fi
 
           # Detect cora's internal fallback SARIF (exit=0 but LLM call failed).
           # cora catches LLM errors in SARIF mode and produces a small fallback SARIF
